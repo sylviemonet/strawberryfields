@@ -934,6 +934,54 @@ def n_mode_gate(matrix, modes, in_modes, pure=True, batched=False):
     output = tf.einsum(eqn, *einsum_inputs)
     return output
 
+def autobatch(indices, batched:bool):
+    return [0]*batched + [i+batched for i in indices]
+
+def oioi_to_ooii(matrix, batched):
+    """
+    Convert from out-in-out-in to out-out-in-in representation
+    """
+    perm = [2*m + 1 for m in range(matrix.ndim // 2)] + [2*m for m in range(matrix.ndim // 2)]
+    return tf.transpose(matrix, autobatch(perm, batched))
+
+def ooii_to_oioi(matrix, batched):
+    """
+    Convert from out-out-in-in to out-in-out-in representation
+    """
+    N = matrix.ndim // 2
+    perm = [m for p in range(matrix.ndim // 2) for m in (p, p + N)]
+    return tf.transpose(matrix, autobatch(perm, batched))
+
+def make_square(matrix, batched):
+    """
+    Convert from multi-index to square
+    """
+    d = int(np.sqrt(np.prod(matrix.shape[batched:])))
+    matrix = tf.reshape(matrix, (-1, d, d) if batched else (d,d))  # now matrix is square
+    return matrix
+
+
+def n_mode_gate(matrix, modes, in_modes, pure=True, batched=False):
+    # matrix.shape : out_1 out_2 ... out_n
+    # modes : Tuple(0,1,2,3,...)
+    state = in_modes
+    matrix = oioi_to_ooii(matrix, batched)
+    matrix = make_square(matrix, batched)
+
+    other_modes = [m for m in range(state.ndim) if m not in modes]
+    perm = other_modes + modes
+    state = tf.transpose(state, autobatch(perm, batched))  # now last indices are the modes we are applying the matrix to
+    state = tf.reshape(state, (state.shape[0], other_modes, -1) if batched else (other_modes, -1))
+
+    if batched:
+        output = tf.einsum("bij,b...j->b...i", matrix, state)
+    else:
+        output = tf.einsum("ij,...j->...i", matrix, state)
+
+    output = tf.reshape(output, (state.shape[:-1], modes))
+    perm = [(other_modes + modes).index(m) for m in other_modes + modes]
+    return tf.transpose(output, autobatch(perm, batched))
+
 
 def single_mode_superop(superop, mode, in_modes, pure=True, batched=False):
     """rho_out = S[rho_in]
@@ -1067,6 +1115,11 @@ def two_mode_squeeze(
     output = two_mode_gate(matrix, mode1, mode2, in_modes, pure, batched)
     return output
 
+def validate_Sd(S, d):
+    if (S.shape[0]) != d.shape[0]:
+        raise ValueError("The matrix S and the vector d do not have compatible dimensions")
+    if not is_symplectic(S.numpy()):
+        raise ValueError("The matrix S is not symplectic")
 
 def gaussian_gate(S, d, modes, in_modes, cutoff, pure=True, batched=False, dtype=tf.complex128):
     """returns gaussian gate unitary matrix on specified input modes"""
@@ -1074,15 +1127,9 @@ def gaussian_gate(S, d, modes, in_modes, cutoff, pure=True, batched=False, dtype
     d = tf.cast(d, dtype)
     if batched:
         for S_, d_ in zip(S, d):
-            if (S_.shape[0]) != d_.shape[0]:
-                raise ValueError("The matrix S and the vector d do not have compatible dimensions")
-            if not is_symplectic(S_.numpy()):
-                raise ValueError("The matrix S is not symplectic")
+            validate_Sd(S_, d_)
     else:
-        if (S.shape[0]) != d.shape[0]:
-            raise ValueError("The matrix S and the vector d do not have compatible dimensions")
-        if not is_symplectic(S.numpy()):
-            raise ValueError("The matrix S is not symplectic")
+        validate_Sd(S, d)
     matrix = gaussian_gate_matrix(S, d, cutoff, batched, dtype)
     output = n_mode_gate(matrix, modes, in_modes=in_modes, pure=pure, batched=batched)
     return output
