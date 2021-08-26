@@ -934,30 +934,31 @@ def n_mode_gate(matrix, modes, in_modes, pure=True, batched=False):
     output = tf.einsum(eqn, *einsum_inputs)
     return output
 
-def autobatch(indices, batched:bool):
+def autobatch(indices:list[int] , batched:bool) -> list[int]:
     return [0]*batched + [i+batched for i in indices]
 
-def oioi_to_ooii(matrix, batched):
+def oioi_to_ooii(array, batched:bool):
     """
     Convert from out-in-out-in to out-out-in-in representation
     """
-    perm = [2*m + 1 for m in range(matrix.ndim // 2)] + [2*m for m in range(matrix.ndim // 2)]
-    return tf.transpose(matrix, autobatch(perm, batched))
+    perm = [2*m for m in range(array.ndim // 2)] + [2*m + 1 for m in range(array.ndim // 2)]
+    return tf.transpose(array, autobatch(perm, batched))
 
-def ooii_to_oioi(matrix, batched):
+def ooii_to_oioi(array_ooii, batched):
     """
     Convert from out-out-in-in to out-in-out-in representation
     """
-    N = matrix.ndim // 2
-    perm = [m for p in range(matrix.ndim // 2) for m in (p, p + N)]
-    return tf.transpose(matrix, autobatch(perm, batched))
+    N = array_ooii.ndim // 2
+    perm = [m for p in range(N) for m in (p, p + N)]  # e.g. [0, 4, 1, 5, 2, 6, 3, 7]
+    array_ioio = tf.transpose(array_ooii, autobatch(perm, batched))
+    return array_ioio
 
-def make_square(matrix, batched):
+def make_square(array, batched):
     """
-    Convert from multi-index to square
+    Convert from 2N-dim array to d x d square matrix
     """
-    d = int(np.sqrt(np.prod(matrix.shape[batched:])))
-    matrix = tf.reshape(matrix, (-1, d, d) if batched else (d,d))  # now matrix is square
+    d = int(np.sqrt(np.prod(array.shape[batched:])))
+    matrix = tf.reshape(array, (-1, d, d) if batched else (d,d))
     return matrix
 
 def n_mode_gate(matrix, modes, in_modes, pure=False, batched=False):
