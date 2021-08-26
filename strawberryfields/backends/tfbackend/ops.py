@@ -960,28 +960,27 @@ def make_square(matrix, batched):
     matrix = tf.reshape(matrix, (-1, d, d) if batched else (d,d))  # now matrix is square
     return matrix
 
+def n_mode_gate(matrix, modes, in_modes, pure=False, batched=False):
+    M = oioi_to_ooii(matrix, batched)
+    U = make_square(U, batched)
+    state = in_modes if pure else oioi_to_ooii(in_modes, batched)
+    indices_l = modes
+    indices_r = [m + state.ndim // 2 for m in modes] if not pure else []
+    other_indices = [m for m in range(state.ndim) if m not in indices_l + indices_r]
+    perm = other_indices + indices_l + indices_r
+    state = tf.transpose(state, autobatch(perm, batched))
 
-def n_mode_gate(matrix, modes, in_modes, pure=True, batched=False):
-    # matrix.shape : out_1 out_2 ... out_n
-    # modes : Tuple(0,1,2,3,...)
-    state = in_modes
-    matrix = oioi_to_ooii(matrix, batched)
-    matrix = make_square(matrix, batched)
-
-    other_modes = [m for m in range(state.ndim) if m not in modes]
-    perm = other_modes + modes
-    state = tf.transpose(state, autobatch(perm, batched))  # now last indices are the modes we are applying the matrix to
-    state = tf.reshape(state, (state.shape[0], other_modes, -1) if batched else (other_modes, -1))
-
-    if batched:
-        output = tf.einsum("bij,b...j->b...i", matrix, state)
+    if not pure:
+        d = int(np.sqrt(np.prod(state.shape[batched:])))
+        state = tf.reshape(state, (state.shape[0], other_indices, d, d) if batched else (other_indices, d, d))
+        output = tf.einsum("bij,blk,b...jk->b...il", U, tf.math.conj(U), state) if batched else tf.einsum("ij,lk,...jk->...il", U, tf.math.conj(U), state)
     else:
-        output = tf.einsum("ij,...j->...i", matrix, state)
+        d = int(np.prod(state.shape[batched:]))  # no sqrt
+        state = tf.reshape(state, (state.shape[0], other_indices, d) if batched else (other_indices, d))
+        output = tf.einsum("bij,b...j->b...i", U, state) if batched else tf.einsum("ij,...j->...i", U, state)
 
-    output = tf.reshape(output, (state.shape[:-1], modes))
-    perm = [(other_modes + modes).index(m) for m in other_modes + modes]
-    return tf.transpose(output, autobatch(perm, batched))
-
+    output = tf.reshape(output, rho.shape[:-1] + indices_l + indices_r)
+    return tf.transpose(output, autobatch([perm.index(m) for m in perm], batched))
 
 def single_mode_superop(superop, mode, in_modes, pure=True, batched=False):
     """rho_out = S[rho_in]
